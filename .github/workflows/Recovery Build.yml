@@ -1,61 +1,34 @@
-name: Recovery Build
+name: Recovery Build (vayu)
 
 on:
   workflow_dispatch:
     inputs:
-      manifest_version:
-        description: "Select OrangeFox Manifest version"
-        required: true
-        type: choice
-        default: "16.0"
-        options:
-          - "14.1"
-          - "16.0"
-
       device_tree_url:
-        description: "Select Device Tree repository"
+        description: "Device tree URL"
         required: true
-        type: choice
-        default: https://github.com/AzzyC/ofox_device_xiaomi_peridot
-        options:
-          - https://github.com/AzzyC/ofox_device_xiaomi_peridot
-          - https://gitlab.com/OrangeFox/device/peridot_new
+        default: "https://github.com/RR-pixel/aera-16.0"
+        type: string
 
       device_tree_branch:
-        description: "Select Device Tree branch"
+        description: "Device tree branch"
         required: true
-        default: "fox_16.0"
-        type: choice
-        options:
-          - "fox_14.1"
-          - "auto-dfe"
-          - "fox_16.0"
-
-      build_type:
-        description: "Select OrangeFox Build Type"
-        required: true
-        type: choice
-        default: None
-        options:
-          - None
-          - Stable
-          - Beta
-          - Alpha
-
-      maintainer_patch_version:
-        description: "Input maintainer patch version (for Stable build)"
-        required: false
+        default: "aera-16.0"
         type: string
-        default: ""
 
-      notification_mode:
-        description: "Select Telegram notification mode"
+      vayu_kernel:
+        description: "Kernel yang dipakai"
         required: true
+        default: "default"
         type: choice
-        default: quiet
         options:
-          - quiet
-          - loud
+          - default
+          - miui
+
+      publish_release:
+        description: "Upload juga ke GitHub Release (tanpa ini hanya jadi artifact)"
+        required: true
+        default: false
+        type: boolean
 
 jobs:
   build:
@@ -65,15 +38,15 @@ jobs:
       contents: write
 
     env:
-      SYNC_URL: https://gitlab.com/OrangeFox/sync.git
-      MANIFEST_BRANCH: ${{ inputs.manifest_version }}
+      SYNC_URL: https://github.com/AERA-Recovery/android_manifest.git
+      MANIFEST_BRANCH: "aera-16.0"
       DEVICE_TREE_URL: ${{ inputs.device_tree_url }}
       DEVICE_TREE_BRANCH: ${{ inputs.device_tree_branch }}
-      DEVICE_PATH: device/xiaomi/peridot
-      DEVICE_NAME: peridot
+      DEVICE_PATH: device/xiaomi/vayu
+      DEVICE_NAME: vayu
       BUILD_TARGET: recovery
-      TELEGRAM_CHAT_ID: ${{ inputs.notification_mode == 'quiet' && '-1002917930475' || '-1001480977582' }}
-      TZ: Europe/London
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      TZ: Asia/Jakarta
       USE_CCACHE: "1"
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 4G
@@ -102,7 +75,7 @@ jobs:
 
     - name: Initialize workspace
       run: |
-        /tmp/send_msg.sh "🚀 *Starting OrangeFox build* for \`${{ env.DEVICE_NAME }}\` (\`${{ env.DEVICE_TREE_BRANCH }}\`)\n🔗 [View Workflow Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+        /tmp/send_msg.sh "🚀 *Starting AERA build* for \`${{ env.DEVICE_NAME }}\` (\`${{ env.DEVICE_TREE_BRANCH }}\`, kernel \`${{ inputs.vayu_kernel }}\`)\n🔗 [View Workflow Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
         mkdir workspace
         cd workspace
         echo "workspace-folder=$(pwd)" >> $GITHUB_OUTPUT
@@ -120,7 +93,7 @@ jobs:
       uses: actions/cache/restore@v4
       with:
         path: ${{ env.CCACHE_DIR }}
-        key: ${{ env.MANIFEST_BRANCH }}-peridot-ccache
+        key: ${{ env.MANIFEST_BRANCH }}-vayu-ccache
       continue-on-error: true
 
     - name: Install OpenJDK
@@ -129,36 +102,37 @@ jobs:
         distribution: 'zulu'
         java-version: '11'
 
-    - name: Sync OrangeFox sources and minimal manifest
+    - name: Sync AERA sources and minimal manifest
       run: |
-        /tmp/send_msg.sh "🌐 Syncing OrangeFox sources..."
-        cd ${{ steps.pwd.outputs.workspace-folder }}
-        git clone --depth=1 ${{ env.SYNC_URL }}
-        cd sync
-        ./orangefox_sync.sh --branch ${{ env.MANIFEST_BRANCH }} --path ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}
+        /tmp/send_msg.sh "🌐 Syncing AERA sources..."
+        mkdir ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }} && \
+          cd ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }}
+        repo init --depth=1 -u ${{ env.SYNC_URL }} -b ${{ env.MANIFEST_BRANCH }}
+        repo sync -c --force-sync --no-clone-bundle --no-tags -j$(nproc)
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Get latest bootable/recovery commit
       id: recovery_commit
       run: |
-        cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/bootable/recovery
+        cd ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }}/bootable/recovery
         RECOVERY_COMMIT=$(git rev-parse --short=7 HEAD)
         echo "RECOVERY_COMMIT=$RECOVERY_COMMIT" >> $GITHUB_OUTPUT
         echo "Latest bootable/recovery commit: $RECOVERY_COMMIT"
-        /tmp/send_msg.sh "🔁 bootable/recovery: [${RECOVERY_COMMIT}](https://gitlab.com/OrangeFox/bootable/Recovery/tree/${RECOVERY_COMMIT})"
+        /tmp/send_msg.sh "🔁 bootable/recovery: [${RECOVERY_COMMIT}](https://github.com/AERA-Recovery/android_bootable_recovery/tree/${RECOVERY_COMMIT})"
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Clone device tree
       run: |
         /tmp/send_msg.sh "🌲 Cloning device tree for \`${{ env.DEVICE_NAME }}\`..."
-        cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}
+        cd ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }}
+        mkdir -p ${{ env.DEVICE_PATH }}
         git clone --depth=1 ${{ env.DEVICE_TREE_URL }} -b ${{ env.DEVICE_TREE_BRANCH }} ./${{ env.DEVICE_PATH }}
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Get latest device tree commit
       id: devtree_commit
       run: |
-        cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/${{ env.DEVICE_PATH }}
+        cd ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }}/${{ env.DEVICE_PATH }}
         LATEST_COMMIT=$(git rev-parse --short=7 HEAD)
         echo "LATEST_COMMIT=$LATEST_COMMIT" >> $GITHUB_OUTPUT
         echo "Latest device tree commit: $LATEST_COMMIT"
@@ -185,8 +159,8 @@ jobs:
 
     - name: Building recovery
       run: |
-        /tmp/send_msg.sh "⚙️ Starting build for \`${{ env.DEVICE_NAME }}\`..."
-        cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}
+        /tmp/send_msg.sh "⚙️ Starting build for \`${{ env.DEVICE_NAME }}\` (kernel \`${{ inputs.vayu_kernel }}\`)..."
+        cd ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }}
 
         set +e
         source build/envsetup.sh
@@ -214,20 +188,15 @@ jobs:
           unset USE_CCACHE CCACHE_EXEC
         fi
 
-        if [[ "${{ inputs.build_type }}" == "None" ]]; then
-          unset FOX_BUILD_TYPE
+        # Pilihan kernel vayu (tree memilih lewat FOX_VARIANT=MIUI)
+        if [[ "${{ inputs.vayu_kernel }}" == "miui" ]]; then
+          export VAYU_KERNEL=miui
+          export FOX_VARIANT=MIUI
         else
-          export FOX_BUILD_TYPE="${{ inputs.build_type }}"
+          export VAYU_KERNEL=default
+          unset FOX_VARIANT
         fi
-
-        if [[ "${{ inputs.build_type }}" == "Stable" ]]; then
-          if [[ -z "${{ inputs.maintainer_patch_version }}" ]]; then
-            echo "::error::Stable builds require a maintainer patch version."
-            exit 1
-          fi
-
-          export FOX_MAINTAINER_PATCH_VERSION="${{ inputs.maintainer_patch_version }}"
-        fi
+        echo "VAYU_KERNEL=${VAYU_KERNEL} FOX_VARIANT=${FOX_VARIANT:-<unset>}"
 
         set -e
 
@@ -251,7 +220,7 @@ jobs:
         trap 'kill "$RESOURCE_MONITOR_PID" 2>/dev/null || true' EXIT
 
         if ! mka adbd ${{ env.BUILD_TARGET }}image -j$(nproc --all); then
-          /tmp/send_msg.sh "❌ Build failed for \`${{ env.DEVICE_NAME }}\` (\`${{ env.DEVICE_TREE_BRANCH }}\`)\n🔗 [View Workflow Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          /tmp/send_msg.sh "❌ Build failed for \`${{ env.DEVICE_NAME }}\` (\`${{ env.DEVICE_TREE_BRANCH }}\`, kernel \`${{ inputs.vayu_kernel }}\`)\n🔗 [View Workflow Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
           exit 1
         fi
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
@@ -285,36 +254,59 @@ jobs:
       uses: actions/cache/save@v4
       with:
         path: ${{ env.CCACHE_DIR }}
-        key: ${{ env.MANIFEST_BRANCH }}-peridot-ccache
+        key: ${{ env.MANIFEST_BRANCH }}-vayu-ccache
       continue-on-error: true
 
+    - name: Upload build artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: AERA-16.0-${{ env.DEVICE_NAME }}-${{ inputs.vayu_kernel }}-UNTESTED
+        path: |
+          ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/AERA-R*.img
+          ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/AERA-R*.zip
+          ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/${{ env.BUILD_TARGET }}.img
+        if-no-files-found: warn
+
+    - name: Upload build log on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-log-${{ env.DEVICE_NAME }}-${{ inputs.vayu_kernel }}
+        path: |
+          ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }}/out/error.log
+          ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }}/out/verbose.log.gz
+        if-no-files-found: ignore
+
     - name: Upload to Release
+      if: ${{ inputs.publish_release }}
       uses: softprops/action-gh-release@v3
       with:
         files: |
-          ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/OrangeFox-R*.img
-          ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/OrangeFox-R*.zip
-          ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/${{ env.BUILD_TARGET }}.img
+          ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/AERA-R*.img
+          ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/AERA-R*.zip
+          ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/${{ env.BUILD_TARGET }}.img
         fail_on_unmatched_files: true
-        name: ${{ env.DEVICE_NAME }}-${{ env.DEVICE_TREE_BRANCH }}-${{ steps.devtree_commit.outputs.LATEST_COMMIT }}
+        name: ${{ env.DEVICE_NAME }}-${{ inputs.vayu_kernel }}-${{ env.DEVICE_TREE_BRANCH }}-${{ steps.devtree_commit.outputs.LATEST_COMMIT }}
         tag_name: ${{ github.run_id }}
         body: |
           Manifest: ${{ env.MANIFEST_BRANCH }}
           Device: ${{ env.DEVICE_NAME }}
+          Kernel: ${{ inputs.vayu_kernel }}
           Target: ${{ env.BUILD_TARGET }}
           Device tree branch: ${{ env.DEVICE_TREE_BRANCH }}
           Device tree commit: [${{ steps.devtree_commit.outputs.LATEST_COMMIT }}](${{ env.DEVICE_TREE_URL }}/tree/${{ steps.devtree_commit.outputs.LATEST_COMMIT }})
-          bootable/recovery commit: [${{ steps.recovery_commit.outputs.RECOVERY_COMMIT }}](https://gitlab.com/OrangeFox/bootable/Recovery/tree/${{ steps.recovery_commit.outputs.RECOVERY_COMMIT }})
+          bootable/recovery commit: [${{ steps.recovery_commit.outputs.RECOVERY_COMMIT }}](https://github.com/AERA-Recovery/android_bootable_recovery/tree/${{ steps.recovery_commit.outputs.RECOVERY_COMMIT }})
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Notify Release
+    - name: Notify complete
       if: success()
       run: |
-        RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/${{ github.run_id }}"
+        RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         DEVICE_TREE_BROWSE_URL="${{ env.DEVICE_TREE_URL }}/tree/${{ steps.devtree_commit.outputs.LATEST_COMMIT }}"
-        RECOVERY_BROWSE_URL="https://gitlab.com/OrangeFox/bootable/Recovery/tree/${{ steps.recovery_commit.outputs.RECOVERY_COMMIT }}"
-        /tmp/send_msg.sh "📦 *Build complete!*\n🔗 [Download]($RELEASE_URL)\n🌲 Device tree branch: \`${{ env.DEVICE_TREE_BRANCH }}\`\n🌲 Device tree commit: [${{ steps.devtree_commit.outputs.LATEST_COMMIT }}]($DEVICE_TREE_BROWSE_URL)\n🔁 bootable/recovery commit: [${{ steps.recovery_commit.outputs.RECOVERY_COMMIT }}]($RECOVERY_BROWSE_URL)"
+        RECOVERY_BROWSE_URL="https://github.com/AERA-Recovery/android_bootable_recovery/tree/${{ steps.recovery_commit.outputs.RECOVERY_COMMIT }}"
+        /tmp/send_msg.sh "📦 *Build complete!* (kernel \`${{ inputs.vayu_kernel }}\`)\n🔗 [Download]($RUN_URL)\n🌲 Device tree branch: \`${{ env.DEVICE_TREE_BRANCH }}\`\n🌲 Device tree commit: [${{ steps.devtree_commit.outputs.LATEST_COMMIT }}]($DEVICE_TREE_BROWSE_URL)\n🔁 bootable/recovery commit: [${{ steps.recovery_commit.outputs.RECOVERY_COMMIT }}]($RECOVERY_BROWSE_URL)"
 
     - name: Notify Workflow end
       if: always()
